@@ -1,0 +1,22 @@
+# Ignore ambientes virtuais
+.venv/
+venv/
+
+# Ignore arquivos temporários do Python
+*.pyc
+__pycache__/
+
+# Ignore diretórios de build e dist
+build/
+dist/
+
+# Ignore arquivos do PyInstaller
+*.spec
+
+# Ignore configurações de IDEs
+.idea/
+*.iml
+.vscode/
+
+# Ignore pastas temporárias
+temp/
