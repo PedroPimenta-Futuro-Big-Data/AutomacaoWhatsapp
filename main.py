@@ -5,7 +5,6 @@ from tkinter import ttk, messagebox, filedialog
 import threading
 import os
 import pyperclip
-import shutil
 
 # Configurações
 pyautogui.PAUSE = 0.5
@@ -78,82 +77,122 @@ class WhatsAppAutomator:
         except Exception as e:
             raise RuntimeError(f"Erro em {turma}: {str(e)}")
 
-# ... (O restante da interface gráfica segue similar, com ajustes para usar a nova classe)
+def carregar_turmas():
+    turmas = []
+    try:
+        with open('turmas.txt', 'r', encoding='utf-8') as arquivo:
+            for linha in arquivo:
+                linha = linha.strip()
+                if linha:
+                    nome, dia = linha.split(',')
+                    turmas.append({'nome': nome.strip(), 'dia': dia.strip().lower()})
+    except Exception as e:
+        messagebox.showerror("Erro", f"Erro ao carregar turmas: {str(e)}")
+    return turmas
 
+# Interface Gráfica
+def criar_interface():
+    root = tk.Tk()
+    root.title("Automação WhatsApp")
+    root.geometry("500x400")
 
-# Interface gráfica
-root = tk.Tk()
-root.title("Automação WhatsApp")
-root.geometry("500x400")
-root.iconbitmap("logo.ico")
+    automator = WhatsAppAutomator()
+    todas_turmas = carregar_turmas()
+    dias_disponiveis = list(set(t['dia'] for t in todas_turmas)) if todas_turmas else []
 
-# Carregar turmas
-todas_turmas = carregar_turmas()
-dias_disponiveis = list(set(t['dia'] for t in todas_turmas)) if todas_turmas else []
+    # Frame de seleção de turma
+    frame_selecao = ttk.LabelFrame(root, text="Seleção de Turmas")
+    frame_selecao.pack(pady=10, padx=10, fill='x')
 
-#### Frame de seleção de turma
-frame_selecao = ttk.LabelFrame(root, text="Seleção de Turmas")
-frame_selecao.pack(pady=10, padx=10, fill='x')
+    modo_selecao = tk.StringVar(value='todas')
 
-modo_selecao = tk.StringVar(value='todas')
+    rb_todas = ttk.Radiobutton(frame_selecao, text="Todas as Turmas", variable=modo_selecao, value='todas')
+    rb_todas.pack(side='left', padx=5)
 
-rb_todas = ttk.Radiobutton(frame_selecao, text="Todas as Turmas",
-                           variable=modo_selecao, value='todas')
-rb_todas.pack(side='left', padx=5)
+    rb_dia = ttk.Radiobutton(frame_selecao, text="Turmas por Dia:", variable=modo_selecao, value='dia')
+    rb_dia.pack(side='left', padx=5)
 
-rb_dia = ttk.Radiobutton(frame_selecao, text="Turmas por Dia:",
-                         variable=modo_selecao, value='dia')
-rb_dia.pack(side='left', padx=5)
+    combo_dias = ttk.Combobox(frame_selecao, values=dias_disponiveis, state='disabled')
+    combo_dias.pack(side='left', padx=5)
 
-combo_dias = ttk.Combobox(frame_selecao, values=dias_disponiveis, state='disabled')
-combo_dias.pack(side='left', padx=5)
+    def atualizar_combobox(*args):
+        combo_dias.config(state='readonly' if modo_selecao.get() == 'dia' else 'disabled')
+    modo_selecao.trace_add('write', atualizar_combobox)
 
+    # Frame de imagem
+    frame_imagem = ttk.LabelFrame(root, text="Imagem")
+    frame_imagem.pack(pady=5, padx=10, fill='x')
 
-def atualizar_combobox(*args):
-    combo_dias.config(state='readonly' if modo_selecao.get() == 'dia' else 'disabled')
+    def selecionar_imagem():
+        caminho = filedialog.askopenfilename(filetypes=[("Imagens", "*.png;*.jpg;*.jpeg")])
+        if caminho:
+            automator.caminho_imagem = caminho
+            automator.nome_imagem = os.path.basename(caminho)
+            lbl_imagem.config(text=f"Imagem: {automator.nome_imagem}")
 
+    btn_imagem = ttk.Button(frame_imagem, text="Selecionar Imagem", command=selecionar_imagem)
+    btn_imagem.pack(side='left', padx=5)
 
-modo_selecao.trace_add('write', atualizar_combobox)
+    lbl_imagem = ttk.Label(frame_imagem, text="Nenhuma imagem selecionada")
+    lbl_imagem.pack(side='left', padx=5)
 
+    # Campo de mensagem
+    frame_mensagem = ttk.LabelFrame(root, text="Mensagem")
+    frame_mensagem.pack(pady=10, padx=10, fill='both', expand=True)
 
-#### Frame de seleção de Imagem ####
-def selecionar_imagem():
-    global caminho_imagem, arquivo_temp, nome_imagem
-    caminho_imagem = filedialog.askopenfilename(filetypes=[("Imagens", "*.png;*.jpg;*.jpeg")])
-    nome_imagem = os.path.basename(caminho_imagem)  # Pega apenas o nome do arquivo
-    print(nome_imagem)
+    campo_mensagem = tk.Text(frame_mensagem, height=6)
+    campo_mensagem.pack(pady=5, padx=5, fill='both', expand=True)
 
-    if nome_imagem:
-        lbl_imagem.config(text="Imagem selecionada: " + nome_imagem)
+    # Botão de envio
+    def enviar_mensagens():
+        if automator.bloqueio_envio:
+            return
 
-        # Criar uma cópia temporária para manipulação
-        pasta_temp = os.path.join(os.getcwd(), "temp")  # Criar uma pasta temp no diretório atual
-        if not os.path.exists(pasta_temp):
-            os.makedirs(pasta_temp)
+        try:
+            mensagem = campo_mensagem.get("1.0", tk.END).strip()
+            if not mensagem:
+                messagebox.showerror("Erro", "Digite uma mensagem!")
+                return
 
-        arquivo_temp = os.path.join(pasta_temp, nome_imagem)  # Usar apenas o nome do arquivo
-        shutil.copy(caminho_imagem, arquivo_temp)  # Copiar imagem para pasta temporária
+            if modo_selecao.get() == 'todas':
+                turmas_selecionadas = [t['nome'] for t in todas_turmas]
+            else:
+                dia = combo_dias.get().lower()
+                turmas_selecionadas = [t['nome'] for t in todas_turmas if t['dia'] == dia]
 
-# Botão para selecionar imagem
-frame_imagem = ttk.LabelFrame(root, text="Imagem")
-frame_imagem.pack(pady=5, padx=10, fill='x')
+            if not turmas_selecionadas:
+                messagebox.showwarning("Aviso", "Nenhuma turma selecionada!")
+                return
 
-btn_imagem = ttk.Button(frame_imagem, text="Selecionar Imagem", command=selecionar_imagem)
-btn_imagem.pack(side='left', padx=5)
+            if not messagebox.askyesno("Confirmar", f"Enviar para {len(turmas_selecionadas)} turmas?"):
+                return
 
-lbl_imagem = ttk.Label(frame_imagem, text="Nenhuma imagem selecionada")
-lbl_imagem.pack(side='left', padx=5)
+            automator.bloqueio_envio = True
 
+            def tarefa_envio():
+                try:
+                    messagebox.showinfo("Atenção", "Posicione o WhatsApp Web em 5 segundos!")
+                    time.sleep(5)
+                    
+                    for turma in turmas_selecionadas:
+                        automator.enviar_para_turma(turma, mensagem)
 
-#### Campo de mensagem ####
-frame_mensagem = ttk.LabelFrame(root, text="Mensagem")
-frame_mensagem.pack(pady=10, padx=10, fill='both', expand=True)
+                    messagebox.showinfo("Sucesso", "Mensagens enviadas!")
+                except Exception as e:
+                    messagebox.showerror("Erro", str(e))
+                finally:
+                    automator.bloqueio_envio = False
 
-campo_mensagem = tk.Text(frame_mensagem, height=6)
-campo_mensagem.pack(pady=5, padx=5, fill='both', expand=True)
+            threading.Thread(target=tarefa_envio, daemon=True).start()
 
-# Botão de envio
-btn_enviar = ttk.Button(root, text="Enviar Mensagens", command=enviar_mensagens)
-btn_enviar.pack(pady=10)
+        except Exception as e:
+            messagebox.showerror("Erro", str(e))
+            automator.bloqueio_envio = False
 
-root.mainloop()
+    btn_enviar = ttk.Button(root, text="Enviar Mensagens", command=enviar_mensagens)
+    btn_enviar.pack(pady=10)
+
+    root.mainloop()
+
+if __name__ == "__main__":
+    criar_interface()
