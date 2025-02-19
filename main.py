@@ -8,7 +8,7 @@ import pyperclip
 
 # Configurações
 pyautogui.PAUSE = 0.5
-TEMPO_ESPERA_ELEMENTO = 5
+TEMPO_ESPERA_ELEMENTO = 10  # Aumentado para 10 segundos
 CAMINHO_ASSETS = os.path.join(os.getcwd(), 'assets')
 
 class WhatsAppAutomator:
@@ -16,66 +16,46 @@ class WhatsAppAutomator:
         self.bloqueio_envio = False
         self.caminho_imagem = None
         self.nome_imagem = None
+    
 
-    def buscar_elemento(self, imagem, regiao=None, confianca=0.9):
-        """Procura por uma imagem na tela dentro de um timeout."""
+    def buscar_elemento(self, imagem, regiao=None, confianca=0.7):
         inicio = time.time()
         while time.time() - inicio < TEMPO_ESPERA_ELEMENTO:
-            pos = pyautogui.locateOnScreen(
-                os.path.join(CAMINHO_ASSETS, imagem),
-                region=regiao,
-                confidence=confianca,
-                grayscale=True
-            )
-            if pos:
-                return pos
-            time.sleep(0.5)
+            try:
+                pos = pyautogui.locateOnScreen(
+                    os.path.join(CAMINHO_ASSETS, imagem),
+                    region=regiao,
+                    confidence=confianca,
+                    grayscale=True
+                )
+                if pos:
+                    return pos
+            except pyautogui.ImageNotFoundException:
+                time.sleep(0.5)
         raise Exception(f"Elemento não encontrado: {imagem}")
 
     def clicar_elemento(self, imagem, regiao=None):
-        """Encontra e clica no elemento desejado."""
         pos = self.buscar_elemento(imagem, regiao)
         pyautogui.click(pyautogui.center(pos))
 
     def buscar_grupo(self, turma):
-        """Localiza e seleciona o grupo no WhatsApp."""
         try:
-            self.clicar_elemento('lupa.png')  # Ícone de busca
-        except:
-            pyautogui.hotkey('ctrl', 'f')  # Fallback: Atalho de busca
-        pyperclip.copy(turma)
-        pyautogui.hotkey('ctrl', 'v')
-        time.sleep(1)
-        pyautogui.press('enter')
-
-    def anexar_imagem(self):
-        """Anexa a imagem selecionada."""
-        self.clicar_elemento('anexar.png')  # Ícone de clipe
-        time.sleep(1)
-        self.clicar_elemento('fotos_videos.png')  # Opção "Fotos e Vídeos"
-        time.sleep(1)
-        pyperclip.copy(self.caminho_imagem)
-        pyautogui.hotkey('ctrl', 'v')
-        pyautogui.press('enter')
-        time.sleep(2)  # Espera upload
-
-    def enviar_mensagem(self, mensagem):
-        """Envia o texto da mensagem."""
-        pyperclip.copy(mensagem)
-        pyautogui.hotkey('ctrl', 'v')
-        pyautogui.press('enter')
-        time.sleep(1)
-
-    def enviar_para_turma(self, turma, mensagem):
-        """Fluxo completo para uma turma."""
-        try:
-            self.buscar_grupo(turma)
-            if self.caminho_imagem:
-                self.anexar_imagem()
-            self.enviar_mensagem(mensagem)
-            pyautogui.hotkey('esc')  # Fecha conversa
+            janela_whatsapp = pyautogui.getWindowsWithTitle("WhatsApp Web")
+            if janela_whatsapp:
+                janela_whatsapp[0].activate()
+                time.sleep(1)
+            
+            self.clicar_elemento('lupa.png')  # Foco total na imagem
+            time.sleep(1)
+            
+            pyperclip.copy(turma)
+            pyautogui.hotkey("ctrl", "v")
+            time.sleep(1.5)
+            pyautogui.press('enter')
         except Exception as e:
-            raise RuntimeError(f"Erro em {turma}: {str(e)}")
+            raise RuntimeError(f"Falha ao buscar grupo: {str(e)}")
+
+    # ... (Os outros métodos permanecem iguais)
 
 def carregar_turmas():
     turmas = []
@@ -89,6 +69,24 @@ def carregar_turmas():
     except Exception as e:
         messagebox.showerror("Erro", f"Erro ao carregar turmas: {str(e)}")
     return turmas
+
+def enviar_mensagem(self, mensagem):
+        """Envia o texto da mensagem."""
+        pyperclip.copy(mensagem)
+        pyautogui.hotkey('ctrl', 'v')
+        pyautogui.press('enter')
+        time.sleep(1)
+def enviar_para_turma(self, turma, mensagem):  # <--- MÉTODO FALTANDO
+        """Fluxo completo para uma turma."""
+        try:
+            self.buscar_grupo(turma)
+            if self.caminho_imagem:
+                self.anexar_imagem()
+            self.enviar_mensagem(mensagem)
+            pyautogui.hotkey('esc')  # Fecha conversa
+        except Exception as e:
+            raise RuntimeError(f"Erro em {turma}: {str(e)}")
+
 
 # Interface Gráfica
 def criar_interface():
