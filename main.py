@@ -3,6 +3,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import threading
 import os
+import logging
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
@@ -10,235 +11,411 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.chrome.service import Service
+from selenium.common.exceptions import TimeoutException, WebDriverException
+from selenium.webdriver.common.action_chains import ActionChains
 
 # Configurações
-TEMPO_ESPERA_ELEMENTO = 10  # Segundos
-CAMINHO_ASSETS = os.path.join(os.getcwd(), 'assets')
+class Config:
+    TEMPO_ESPERA_ELEMENTO = 10
+    TEMPO_ESPERA_LOGIN = 60
+    CAMINHO_ASSETS = os.path.join(os.getcwd(), 'assets')
+    EXTENSOES_IMAGEM = ('.png', '.jpg', '.jpeg')
+
+# Configuração de logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    filename='whatsapp_automator.log',
+    encoding='utf-8'
+)
 
 class WhatsAppAutomator:
     def __init__(self):
-        self.bloqueio_envio = False
-        self.caminho_imagem = None
-        self.nome_imagem = None
-        self.driver = None  # Garanta que está inicializado
+        self._driver = None
+        self._bloqueio_envio = False
+        self._caminho_midia = None
+        self._tipo_midia = None  # 'imagem' ou 'documento'
+
+    @property
+    def bloqueio_envio(self):
+        return self._bloqueio_envio
+
+    @bloqueio_envio.setter
+    def bloqueio_envio(self, value):
+        self._bloqueio_envio = value
 
     def iniciar_driver(self):
+        """Inicia o navegador Chrome e aguarda o login manual"""
         try:
             options = webdriver.ChromeOptions()
             options.add_argument("--disable-notifications")
             options.add_argument("--start-maximized")
-            options.add_experimental_option("detach", True)  # Mantém o navegador aberto após a execução
+            options.add_experimental_option("detach", True)
 
-            self.driver = webdriver.Chrome(
-            service=Service(ChromeDriverManager().install()),
-            options=options
+            self._driver = webdriver.Chrome(
+                service=Service(ChromeDriverManager().install()),
+                options=options
             )
-            self.driver.get("https://web.whatsapp.com")
-        
-            # Aguarde o login MANUAL do usuário
-            WebDriverWait(self.driver, 60).until(
-            lambda d: d.find_element(By.XPATH, '//div[@contenteditable="true"][@data-tab="3"]')
-            )
-            print("Login realizado com sucesso!")
+            self._driver.get("https://web.whatsapp.com")
 
-        except Exception as e:
-            messagebox.showerror("Erro", f"Falha ao iniciar o navegador: {str(e)}")
-            self.driver = None
-
-    def buscar_elemento(self, by, selector, timeout=TEMPO_ESPERA_ELEMENTO):
-        """Espera e retorna um elemento"""
-        return WebDriverWait(self.driver, timeout).until(
-            EC.presence_of_element_located((by, selector)))
-    
-    def buscar_grupo(self, turma):
-        try:
-            if not self.driver:
-                raise RuntimeError("O navegador não foi iniciado corretamente. Reinicie o programa.")
-
-            # Aguarda até que a barra de pesquisa esteja carregada
-            search_box = WebDriverWait(self.driver, 30).until(
+            WebDriverWait(self._driver, Config.TEMPO_ESPERA_LOGIN).until(
                 EC.presence_of_element_located(
                     (By.XPATH, '//div[@contenteditable="true"][@data-tab="3"]')
                 )
             )
-            # Limpar e pesquisar
-            search_box.click()
-            time.sleep(1)
-            search_box.send_keys(Keys.CONTROL + "a")
-            search_box.send_keys(Keys.DELETE)
+            logging.info("Login realizado com sucesso")
+            return True
+        except (WebDriverException, TimeoutException) as e:
+            logging.error(f"Falha ao iniciar navegador: {str(e)}")
+            return False
+
+    def _buscar_elemento(self, by, selector, timeout=Config.TEMPO_ESPERA_ELEMENTO):
+        """Espera e retorna um elemento com tratamento de erro"""
+        try:
+            return WebDriverWait(self._driver, timeout).until(
+                EC.presence_of_element_located((by, selector))
+            )
+        except TimeoutException:
+            logging.error(f"Elemento não encontrado: {selector}")
+            raise
+
+    def _limpar_pesquisa(self):
+        """Limpa o campo de pesquisa de conversas"""
+        search_box = self._buscar_elemento(
+            By.XPATH, '//div[@contenteditable="true"][@data-tab="3"]'
+        )
+        search_box.click()
+        search_box.send_keys(Keys.CONTROL + "a")
+        search_box.send_keys(Keys.DELETE)
+        time.sleep(1)
+
+    def buscar_grupo(self, turma):
+        """Procura e seleciona um grupo pelo nome"""
+        try:
+            self._limpar_pesquisa()
+            search_box = self._buscar_elemento(
+                By.XPATH, '//div[@contenteditable="true"][@data-tab="3"]'
+            )
             search_box.send_keys(turma)
             time.sleep(2)
             search_box.send_keys(Keys.ENTER)
+            time.sleep(2)
+            return True
+        except Exception as e:
+            logging.error(f"Erro ao buscar grupo {turma}: {str(e)}")
+            return False
+
+    def _anexar_midia(self):
+        """Anexa mídia ao chat atual com verificações adicionais"""
+        try:
+            # Tentar até 3 vezes com esperas crescentes
+            for tentativa in range(1, 4):
+                try:
+                    # Verificar se estamos em uma conversa aberta
+                    self._buscar_elemento(
+                        By.XPATH,
+                        '//div[contains(@class, "two")]//div[@role="textbox"]',
+                        timeout=10
+                    )
+                    
+                    # Localizar o botão de anexar com XPath mais confiável
+                    btn_anexar = self._buscar_elemento(
+                        By.XPATH,
+                        '//div[@role="button"][@title="Anexar"]',
+                        timeout=5 * tentativa
+                    )
+                    btn_anexar.click()
+                    
+                    # Espera para o menu de opções aparecer
+                    time.sleep(1)
+                    
+                    # Localizar input específico para imagens
+                    input_midia = self._buscar_elemento(
+                        By.XPATH,
+                        '//input[@type="file"][@accept="image/*,video/mp4,video/3gpp,video/quicktime"]',
+                        timeout=10
+                    )
+                    input_midia.send_keys(self._caminho_midia)
+                    
+                    # Espera adaptativa para upload
+                    WebDriverWait(self._driver, 30).until(
+                        EC.presence_of_element_located(
+                            (By.XPATH, '//div[@aria-label="Legenda"]')
+                        )
+                    )
+                    
+                    # Enviar usando atalho do teclado como alternativa
+                    ActionChains(self._driver)\
+                        .send_keys(Keys.ENTER)\
+                        .perform()
+                        
+                    time.sleep(2)
+                    return True
+                    
+                except Exception as e:
+                    logging.warning(f"Tentativa {tentativa} falhou: {str(e)}")
+                    if tentativa == 3:
+                        raise
+                    time.sleep(2 * tentativa)
+                    
+            return False
             
         except Exception as e:
-            raise RuntimeError(f"Falha ao buscar grupo: {str(e)}")
-
-    def anexar_imagem(self):
-        """Anexa uma imagem"""
-        try:
-            # Clicar no botão de anexar
-            btn_anexar = self.buscar_elemento(
-                By.XPATH, '//div[@title="Anexar"]')
-            btn_anexar.click()
-            time.sleep(1)
-
-            # Selecionar input de arquivo
-            input_imagem = self.buscar_elemento(
-                By.XPATH, '//input[@accept="image/*,video/mp4,video/3gpp,video/quicktime"]')
-            input_imagem.send_keys(self.caminho_imagem)
-            time.sleep(2)
-
-            # Enviar imagem
-            btn_enviar = self.buscar_elemento(
-                By.XPATH, '//span[@data-icon="send"]')
-            btn_enviar.click()
-            time.sleep(2)
-
-        except Exception as e:
-            raise RuntimeError(f"Erro ao anexar imagem: {str(e)}")
+            logging.error(f"Erro definitivo ao anexar mídia: {str(e)}")
+            return False
 
     def enviar_mensagem(self, mensagem):
-        """Envia mensagem de texto"""
+        """Envia mensagem de texto para o chat atual"""
         try:
-            caixa_mensagem = self.buscar_elemento(
-                By.XPATH, '//div[@contenteditable="true"][@data-tab="10"]')
-            caixa_mensagem.click()
-            caixa_mensagem.send_keys(mensagem)
-            caixa_mensagem.send_keys(Keys.ENTER)
+            caixa_mensagem = self._buscar_elemento(
+                By.XPATH, '//div[@contenteditable="true"][@data-tab="10"]'
+            )
+            caixa_mensagem.send_keys(mensagem + Keys.ENTER)
             time.sleep(1)
+            return True
         except Exception as e:
-            raise RuntimeError(f"Erro ao enviar mensagem: {str(e)}")
+            logging.error(f"Erro ao enviar mensagem: {str(e)}")
+            return False
 
+        # Modifique o método enviar_para_turma:
     def enviar_para_turma(self, turma, mensagem):
-        """Fluxo completo para uma turma"""
+        """Fluxo completo de envio para uma turma"""
         try:
-            self.buscar_grupo(turma)
-            if self.caminho_imagem:
-                self.anexar_imagem()
-            self.enviar_mensagem(mensagem)
+            if not self.buscar_grupo(turma):
+                return False
+            
+            # Verificar se a conversa está realmente aberta
+            try:
+                self._buscar_elemento(
+                    By.XPATH,
+                    '//div[contains(@class, "two")]//div[@role="textbox"]',
+                    timeout=10
+                )
+            except TimeoutException:
+                logging.error("Conversa não aberta corretamente")
+                return False
+            
+            return True
         except Exception as e:
-            raise RuntimeError(f"Erro em {turma}: {str(e)}")
+            logging.error(f"Falha no envio para {turma}: {str(e)}")
+            return False
+
+class WhatsAppGUI:
+    def __init__(self, root):
+        self.root = root
+        self.automator = WhatsAppAutomator()
+        self.turmas = self._carregar_turmas()
+        self._setup_ui()
+        self.var_modo.trace_add('write', lambda *_: self._atualizar_dias())
+
+    def _setup_ui(self):
+        """Configura a interface gráfica"""
+        self.root.title("Automação WhatsApp Pro")
+        self.root.geometry("600x500")
+        self._criar_widgets()
+        self._configurar_layout()
+
+    def _criar_widgets(self):
+        """Cria todos os componentes da interface"""
+        self.frame_controle = ttk.LabelFrame(self.root, text="Controle")
+        self.frame_config = ttk.LabelFrame(self.root, text="Configurações")
+        self.frame_mensagem = ttk.LabelFrame(self.root, text="Mensagem")
+        self.frame_status = ttk.LabelFrame(self.root, text="Status")
+
+        # Widgets de controle
+        self.btn_iniciar = ttk.Button(
+            self.frame_controle, 
+            text="Iniciar Navegador", 
+            command=self._iniciar_navegador
+        )
+        self.btn_enviar = ttk.Button(
+            self.frame_controle,
+            text="Iniciar Envio",
+            command=self._iniciar_envio,
+            state=tk.DISABLED
+        )
+
+        # Widgets de configuração
+        self.var_modo = tk.StringVar(value='todas')
+        self.combo_dias = ttk.Combobox(self.frame_config, state=tk.DISABLED)
+        self._atualizar_dias()
+
+        self.rb_todas = ttk.Radiobutton(
+            self.frame_config,
+            text="Todas as Turmas",
+            variable=self.var_modo,
+            value='todas'
+        )
+        self.rb_dia = ttk.Radiobutton(
+            self.frame_config,
+            text="Filtrar por Dia:",
+            variable=self.var_modo,
+            value='dia'
+        )
+        self.btn_midia = ttk.Button(
+            self.frame_config,
+            text="Selecionar Mídia",
+            command=self._selecionar_midia
+        )
+        self.lbl_midia = ttk.Label(self.frame_config, text="Nenhum arquivo selecionado")
+
+        # Widgets de mensagem
+        self.txt_mensagem = tk.Text(self.frame_mensagem, height=8)
+        self.scroll = ttk.Scrollbar(self.frame_mensagem, command=self.txt_mensagem.yview)
+        self.txt_mensagem.configure(yscrollcommand=self.scroll.set)
+
+        # Widgets de status
+        self.lbl_status = ttk.Label(self.frame_status, text="Pronto")
+        self.progresso = ttk.Progressbar(
+            self.frame_status, 
+            orient=tk.HORIZONTAL, 
+            mode='determinate'
+        )
+
+    def _configurar_layout(self):
+        """Organiza os widgets na interface"""
+        # Layout frames
+        self.frame_controle.pack(pady=5, fill=tk.X, padx=10)
+        self.frame_config.pack(pady=5, fill=tk.X, padx=10)
+        self.frame_mensagem.pack(pady=5, fill=tk.BOTH, expand=True, padx=10)
+        self.frame_status.pack(pady=5, fill=tk.X, padx=10)
+
+        # Layout controle
+        self.btn_iniciar.pack(side=tk.LEFT, padx=5)
+        self.btn_enviar.pack(side=tk.LEFT, padx=5)
+
+        # Layout configuração
+        self.rb_todas.grid(row=0, column=0, padx=5, sticky=tk.W)
+        self.rb_dia.grid(row=0, column=1, padx=5, sticky=tk.W)
+        self.combo_dias.grid(row=0, column=2, padx=5)
+        self.btn_midia.grid(row=1, column=0, pady=5, padx=5, sticky=tk.W)
+        self.lbl_midia.grid(row=1, column=1, columnspan=2, padx=5, sticky=tk.W)
         
-        
-def carregar_turmas():  # <--- FUNÇÃO ADICIONADA
-    turmas = []
-    try:
-        with open('turmas.txt', 'r', encoding='utf-8') as arquivo:
-            for linha in arquivo:
-                linha = linha.strip()
-                if linha:
-                    nome, dia = linha.split(',')
-                turmas.append({'nome': nome.strip(), 'dia': dia.strip().lower()})
-    except FileNotFoundError:
-        messagebox.showerror("Erro", "Arquivo 'turmas.txt' não encontrado!")
-    except Exception as e:
-        messagebox.showerror("Erro", f"Erro ao carregar turmas: {str(e)}")
-    return turmas
+        self.frame_config.columnconfigure([0,1,2], weight=1)
 
-# ... (O restante da interface gráfica permanece igual, exceto pela inicialização do driver)
+        # Layout mensagem
+        self.txt_mensagem.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
-def criar_interface():
-    root = tk.Tk()
-    root.title("Automação WhatsApp")
-    root.geometry("500x400")
+        # Layout status
+        self.lbl_status.pack(side=tk.TOP, fill=tk.X)
+        self.progresso.pack(fill=tk.X)
 
-    automator = WhatsAppAutomator()
-    todas_turmas = carregar_turmas()
-    dias_disponiveis = list(set(t['dia'] for t in todas_turmas)) if todas_turmas else []
+    def _atualizar_dias(self):
+        """Atualiza a lista de dias disponíveis"""
+        dias = list({t['dia'] for t in self.turmas}) if self.turmas else []
+        self.combo_dias['values'] = dias
+        self.combo_dias.set('')
+        state = 'readonly' if self.var_modo.get() == 'dia' and dias else 'disabled'
+        self.combo_dias.config(state=state)
 
-    # Frame de seleção de turma
-    frame_selecao = ttk.LabelFrame(root, text="Seleção de Turmas")
-    frame_selecao.pack(pady=10, padx=10, fill='x')
-
-    modo_selecao = tk.StringVar(value='todas')
-
-    rb_todas = ttk.Radiobutton(frame_selecao, text="Todas as Turmas", variable=modo_selecao, value='todas')
-    rb_todas.pack(side='left', padx=5)
-
-    rb_dia = ttk.Radiobutton(frame_selecao, text="Turmas por Dia:", variable=modo_selecao, value='dia')
-    rb_dia.pack(side='left', padx=5)
-
-    combo_dias = ttk.Combobox(frame_selecao, values=dias_disponiveis, state='disabled')
-    combo_dias.pack(side='left', padx=5)
-
-    def atualizar_combobox(*args):
-        combo_dias.config(state='readonly' if modo_selecao.get() == 'dia' else 'disabled')
-    modo_selecao.trace_add('write', atualizar_combobox)
-
-    # Frame de imagem
-    frame_imagem = ttk.LabelFrame(root, text="Imagem")
-    frame_imagem.pack(pady=5, padx=10, fill='x')
-
-    def selecionar_imagem():
-        caminho = filedialog.askopenfilename(filetypes=[("Imagens", "*.png;*.jpg;*.jpeg")])
+    def _selecionar_midia(self):
+        """Seleciona arquivo de mídia para envio"""
+        caminho = filedialog.askopenfilename(filetypes=[
+            ("Imagens", " ".join(f"*{ext}" for ext in Config.EXTENSOES_IMAGEM)),
+            ("Todos os arquivos", "*.*")
+        ])
         if caminho:
-            automator.caminho_imagem = caminho
-            automator.nome_imagem = os.path.basename(caminho)
-            lbl_imagem.config(text=f"Imagem: {automator.nome_imagem}")
+            self.automator._caminho_midia = caminho
+            self.lbl_midia.config(text=f"Arquivo: {os.path.basename(caminho)}")
 
-    btn_imagem = ttk.Button(frame_imagem, text="Selecionar Imagem", command=selecionar_imagem)
-    btn_imagem.pack(side='left', padx=5)
+    def _iniciar_navegador(self):
+        """Inicia o navegador em uma thread separada"""
+        def tarefa_iniciar():
+            self.btn_iniciar.config(state=tk.DISABLED)
+            if self.automator.iniciar_driver():
+                self.btn_enviar.config(state=tk.NORMAL)
+                self._atualizar_status("Navegador pronto - Faça o login no WhatsApp Web")
+            else:
+                messagebox.showerror("Erro", "Falha ao iniciar o navegador")
+            self.btn_iniciar.config(state=tk.NORMAL)
 
-    lbl_imagem = ttk.Label(frame_imagem, text="Nenhuma imagem selecionada")
-    lbl_imagem.pack(side='left', padx=5)
+        threading.Thread(target=tarefa_iniciar, daemon=True).start()
 
-    # Campo de mensagem
-    frame_mensagem = ttk.LabelFrame(root, text="Mensagem")
-    frame_mensagem.pack(pady=10, padx=10, fill='both', expand=True)
-
-    campo_mensagem = tk.Text(frame_mensagem, height=6)
-    campo_mensagem.pack(pady=5, padx=5, fill='both', expand=True)
-
-    # Botão de envio
-    def enviar_mensagens():
-        if automator.bloqueio_envio:
+    def _iniciar_envio(self):
+        """Inicia o processo de envio das mensagens"""
+        if self.automator.bloqueio_envio:
             return
 
+        mensagem = self.txt_mensagem.get("1.0", tk.END).strip()
+        if not mensagem:
+            messagebox.showwarning("Aviso", "Digite a mensagem a ser enviada!")
+            return
+
+        turmas_selecionadas = self._obter_turmas_selecionadas()
+        if not turmas_selecionadas:
+            messagebox.showwarning("Aviso", "Nenhuma turma selecionada!")
+            return
+
+        if not messagebox.askyesno("Confirmar", f"Deseja enviar para {len(turmas_selecionadas)} turmas?"):
+            return
+
+        self.automator.bloqueio_envio = True
+        self._atualizar_interface_envio(True)
+
+        threading.Thread(target=self._executar_envio, args=(turmas_selecionadas, mensagem), daemon=True).start()
+
+    def _executar_envio(self, turmas, mensagem):
+        """Executa o envio em segundo plano"""
+        total = len(turmas)
+        for idx, turma in enumerate(turmas, 1):
+            try:
+                sucesso = self.automator.enviar_para_turma(turma['nome'], mensagem)
+                status = "✓" if sucesso else "✗"
+                self._atualizar_status(f"Enviando {idx}/{total} - {turma['nome']} {status}")
+                self._atualizar_progresso(idx/total * 100)
+            except Exception as e:
+                logging.error(f"Erro crítico: {str(e)}")
+
+        self._atualizar_interface_envio(False)
+        messagebox.showinfo("Concluído", "Processo finalizado!")
+        self._resetar_interface()
+
+    def _obter_turmas_selecionadas(self):
+        """Retorna a lista de turmas selecionadas"""
+        if self.var_modo.get() == 'todas':
+            return self.turmas
+        return [t for t in self.turmas if t['dia'] == self.combo_dias.get().lower()]
+
+    def _atualizar_status(self, mensagem):
+        """Atualiza a mensagem de status na GUI"""
+        self.root.after(0, self.lbl_status.config, {'text': mensagem})
+
+    def _atualizar_progresso(self, valor):
+        """Atualiza a barra de progresso"""
+        self.root.after(0, self.progresso.config, {'value': valor})
+
+    def _atualizar_interface_envio(self, enviando):
+        """Atualiza o estado dos componentes durante o envio"""
+        state = tk.DISABLED if enviando else tk.NORMAL
+        self.btn_enviar.config(state=state)
+        self.btn_iniciar.config(state=state)
+        self.txt_mensagem.config(state=tk.DISABLED if enviando else tk.NORMAL)
+
+    def _resetar_interface(self):
+        """Restaura a interface ao estado inicial"""
+        self.automator.bloqueio_envio = False
+        self._atualizar_interface_envio(False)
+        self._atualizar_progresso(0)
+        self._atualizar_status("Pronto")
+
+    @staticmethod
+    def _carregar_turmas():
+        """Carrega as turmas do arquivo de configuração"""
         try:
-            mensagem = campo_mensagem.get("1.0", tk.END).strip()
-            if not mensagem:
-                messagebox.showerror("Erro", "Digite uma mensagem!")
-                return
-
-            if modo_selecao.get() == 'todas':
-                turmas_selecionadas = [t['nome'] for t in todas_turmas]
-            else:
-                dia = combo_dias.get().lower()
-                turmas_selecionadas = [t['nome'] for t in todas_turmas if t['dia'] == dia]
-
-            if not turmas_selecionadas:
-                messagebox.showwarning("Aviso", "Nenhuma turma selecionada!")
-                return
-
-            if not messagebox.askyesno("Confirmar", f"Enviar para {len(turmas_selecionadas)} turmas?"):
-                return
-
-            automator.bloqueio_envio = True
-
-            def tarefa_envio():
-                try:
-                    messagebox.showinfo("Atenção", "Posicione o WhatsApp Web em 5 segundos!")
-                    time.sleep(5)
-                    
-                    for turma in turmas_selecionadas:
-                        automator.enviar_para_turma(turma, mensagem)
-
-                    messagebox.showinfo("Sucesso", "Mensagens enviadas!")
-                except Exception as e:
-                    messagebox.showerror("Erro", str(e))
-                finally:
-                    automator.bloqueio_envio = False
-
-            threading.Thread(target=tarefa_envio, daemon=True).start()
-
+            with open('turmas.txt', 'r', encoding='utf-8') as f:
+                return [{
+                    'nome': linha.split(',')[0].strip(),
+                    'dia': linha.split(',')[1].strip().lower()
+                } for linha in f if linha.strip() and len(linha.split(',')) >= 2]
+        except FileNotFoundError:
+            messagebox.showerror("Erro", "Arquivo 'turmas.txt' não encontrado!")
+            return []
         except Exception as e:
-            messagebox.showerror("Erro", str(e))
-            automator.bloqueio_envio = False
-
-    btn_enviar = ttk.Button(root, text="Enviar Mensagens", command=enviar_mensagens)
-    btn_enviar.pack(pady=10)
-
-    root.mainloop()
+            messagebox.showerror("Erro", f"Erro ao ler turmas: {str(e)}")
+            return []
 
 if __name__ == "__main__":
-    criar_interface()
+    root = tk.Tk()
+    app = WhatsAppGUI(root)
+    root.mainloop()
