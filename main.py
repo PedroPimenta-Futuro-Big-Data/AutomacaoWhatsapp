@@ -12,7 +12,6 @@ from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.chrome.service import Service
 from selenium.common.exceptions import TimeoutException, WebDriverException
-from selenium.webdriver.common.action_chains import ActionChains
 
 # Configurações
 class Config:
@@ -52,10 +51,13 @@ class WhatsAppAutomator:
             options.add_argument("--start-maximized")
             options.add_experimental_option("detach", True)
 
+            # Configuração corrigida do ChromeDriver
+            service = Service(ChromeDriverManager().install())
             self._driver = webdriver.Chrome(
-                service=Service(ChromeDriverManager().install()),
+                service=service,
                 options=options
             )
+
             self._driver.get("https://web.whatsapp.com")
 
             WebDriverWait(self._driver, Config.TEMPO_ESPERA_LOGIN).until(
@@ -65,8 +67,13 @@ class WhatsAppAutomator:
             )
             logging.info("Login realizado com sucesso")
             return True
-        except (WebDriverException, TimeoutException) as e:
-            logging.error(f"Falha ao iniciar navegador: {str(e)}")
+        except Exception as e:
+            logging.error(f"Falha crítica: {str(e)}")
+            messagebox.showerror("Erro Fatal", 
+                "Verifique:\n"
+                "1. Conexão com internet\n"
+                "2. Chrome atualizado\n"
+                "3. Permissões de arquivo")
             return False
 
     def _buscar_elemento(self, by, selector, timeout=Config.TEMPO_ESPERA_ELEMENTO):
@@ -106,62 +113,24 @@ class WhatsAppAutomator:
             return False
 
     def _anexar_midia(self):
-        """Anexa mídia ao chat atual com verificações adicionais"""
+        """Anexa mídia ao chat atual"""
         try:
-            # Tentar até 3 vezes com esperas crescentes
-            for tentativa in range(1, 4):
-                try:
-                    # Verificar se estamos em uma conversa aberta
-                    self._buscar_elemento(
-                        By.XPATH,
-                        '//div[contains(@class, "two")]//div[@role="textbox"]',
-                        timeout=10
-                    )
-                    
-                    # Localizar o botão de anexar com XPath mais confiável
-                    btn_anexar = self._buscar_elemento(
-                        By.XPATH,
-                        '//div[@role="button"][@title="Anexar"]',
-                        timeout=5 * tentativa
-                    )
-                    btn_anexar.click()
-                    
-                    # Espera para o menu de opções aparecer
-                    time.sleep(1)
-                    
-                    # Localizar input específico para imagens
-                    input_midia = self._buscar_elemento(
-                        By.XPATH,
-                        '//input[@type="file"][@accept="image/*,video/mp4,video/3gpp,video/quicktime"]',
-                        timeout=10
-                    )
-                    input_midia.send_keys(self._caminho_midia)
-                    
-                    # Espera adaptativa para upload
-                    WebDriverWait(self._driver, 30).until(
-                        EC.presence_of_element_located(
-                            (By.XPATH, '//div[@aria-label="Legenda"]')
-                        )
-                    )
-                    
-                    # Enviar usando atalho do teclado como alternativa
-                    ActionChains(self._driver)\
-                        .send_keys(Keys.ENTER)\
-                        .perform()
-                        
-                    time.sleep(2)
-                    return True
-                    
-                except Exception as e:
-                    logging.warning(f"Tentativa {tentativa} falhou: {str(e)}")
-                    if tentativa == 3:
-                        raise
-                    time.sleep(2 * tentativa)
-                    
-            return False
-            
+            btn_anexar = self._buscar_elemento(By.XPATH, '//div[@title="Anexar"]')
+            btn_anexar.click()
+            time.sleep(1)
+
+            input_midia = self._buscar_elemento(
+                By.XPATH, '//input[@accept="image/*,video/mp4,video/3gpp,video/quicktime"]'
+            )
+            input_midia.send_keys(self._caminho_midia)
+            time.sleep(2)
+
+            btn_enviar = self._buscar_elemento(By.XPATH, '//span[@data-icon="send"]')
+            btn_enviar.click()
+            time.sleep(2)
+            return True
         except Exception as e:
-            logging.error(f"Erro definitivo ao anexar mídia: {str(e)}")
+            logging.error(f"Erro ao anexar mídia: {str(e)}")
             return False
 
     def enviar_mensagem(self, mensagem):
@@ -177,22 +146,16 @@ class WhatsAppAutomator:
             logging.error(f"Erro ao enviar mensagem: {str(e)}")
             return False
 
-        # Modifique o método enviar_para_turma:
     def enviar_para_turma(self, turma, mensagem):
         """Fluxo completo de envio para uma turma"""
         try:
             if not self.buscar_grupo(turma):
                 return False
             
-            # Verificar se a conversa está realmente aberta
-            try:
-                self._buscar_elemento(
-                    By.XPATH,
-                    '//div[contains(@class, "two")]//div[@role="textbox"]',
-                    timeout=10
-                )
-            except TimeoutException:
-                logging.error("Conversa não aberta corretamente")
+            if self._caminho_midia and not self._anexar_midia():
+                return False
+            
+            if mensagem and not self.enviar_mensagem(mensagem):
                 return False
             
             return True
@@ -206,7 +169,6 @@ class WhatsAppGUI:
         self.automator = WhatsAppAutomator()
         self.turmas = self._carregar_turmas()
         self._setup_ui()
-        self.var_modo.trace_add('write', lambda *_: self._atualizar_dias())
 
     def _setup_ui(self):
         """Configura a interface gráfica"""
@@ -305,9 +267,7 @@ class WhatsAppGUI:
         """Atualiza a lista de dias disponíveis"""
         dias = list({t['dia'] for t in self.turmas}) if self.turmas else []
         self.combo_dias['values'] = dias
-        self.combo_dias.set('')
-        state = 'readonly' if self.var_modo.get() == 'dia' and dias else 'disabled'
-        self.combo_dias.config(state=state)
+        self.combo_dias.state(['!disabled' if self.var_modo.get() == 'dia' else 'disabled'])
 
     def _selecionar_midia(self):
         """Seleciona arquivo de mídia para envio"""
